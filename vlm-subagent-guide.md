@@ -37,6 +37,13 @@ nemoclaw --version
 openshell --version
 ```
 
+You should see something like:
+
+```
+nemoclaw v0.0.10
+openshell 0.0.25
+```
+
 ## Part 2: Onboard and Create a Sandbox
 
 ``` bash
@@ -53,18 +60,25 @@ When prompted:
 
 Wait for the image build and upload to finish. This takes a few minutes on first run.
 
-At the end you'll see a tokenized dashboard URL — save it. You'll also see:
+You should see output ending with:
 
 ```
-Run:         nemoclaw my-assistant connect
-Status:      nemoclaw my-assistant status
+✓ Sandbox 'my-assistant' created
+✓ OpenClaw gateway launched inside sandbox
+
+Sandbox      my-assistant (Landlock + seccomp + netns)
+Model        nvidia/nemotron-3-super-120b-a12b (NVIDIA Endpoints)
 ```
+
+Save the tokenized dashboard URL it prints.
 
 Verify the sandbox is running:
 
 ``` bash
 nemoclaw my-assistant status
 ```
+
+You should see `Phase: Ready` and `OpenClaw: running`.
 
 > **Non-interactive mode:** For scripted setups, you can run:
 > ``` bash
@@ -81,6 +95,19 @@ Everything below uses these — set them once:
 SANDBOX=my-assistant              # whatever you named it in Part 2
 DOCKER_CTR=openshell-cluster-nemoclaw
 export NVIDIA_API_KEY=nvapi-...   # your NVIDIA API key
+```
+
+Verify docker can reach the sandbox:
+
+``` bash
+docker exec $DOCKER_CTR kubectl get pod $SANDBOX -n openshell
+```
+
+You should see:
+
+```
+NAME           READY   STATUS    RESTARTS   AGE
+my-assistant   1/1     Running   0          Xm
 ```
 
 ## Part 4: Update the OpenShell Network Policy
@@ -130,10 +157,16 @@ You should see:
 ✓ Policy version N submitted (hash: ...)
 ```
 
-Verify:
+Verify node is in the policy:
 
 ``` bash
 openshell policy get $SANDBOX --full | grep -A 5 "nvidia:" | grep node
+```
+
+You should see:
+
+```
+    - path: /usr/local/bin/node
 ```
 
 ## Part 5: Patch openclaw.json
@@ -150,6 +183,8 @@ docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
   -- cat /sandbox/.openclaw/openclaw.json > /tmp/remote_openclaw.json
 ```
 
+You should see no output (the file is written to `/tmp/remote_openclaw.json` locally).
+
 ### 5b. Run the patch script
 
 The patch script is at [`vlm-subagent/openclaw-patch.py`](vlm-subagent/openclaw-patch.py) in this repository. Copy it to `/tmp` and run it:
@@ -159,7 +194,20 @@ python3 /tmp/openclaw-patch.py "$NVIDIA_API_KEY" \
   < /tmp/remote_openclaw.json > /tmp/updated_openclaw.json
 ```
 
-> You can compare the result against [`vlm-subagent/openclaw-reference.json`](vlm-subagent/openclaw-reference.json) if you want to verify the patch output.
+You should see no output. Verify the patch worked:
+
+``` bash
+python3 -c "import json; c=json.load(open('/tmp/updated_openclaw.json')); print('Providers:', list(c['models']['providers'].keys())); print('Agents:', [a['id'] for a in c['agents']['list']])"
+```
+
+You should see:
+
+```
+Providers: ['inference', 'nvidia-omni']
+Agents: ['main', 'vision-operator']
+```
+
+> You can also compare the result against [`vlm-subagent/openclaw-reference.json`](vlm-subagent/openclaw-reference.json).
 
 ### 5c. Push the patched config to the sandbox
 
@@ -186,14 +234,21 @@ docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
   -- chmod 444 /sandbox/.openclaw/.config-hash
 ```
 
-The gateway will hot-reload the config automatically. Check the logs to confirm:
+The gateway will hot-reload the config automatically. Wait a few seconds, then check the logs:
 
 ``` bash
 docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
   -- tail -3 /tmp/gateway.log
 ```
 
-You should see: `[reload] config hot reload applied (models.providers.nvidia-omni)`
+You should see:
+
+```
+[reload] config change detected; evaluating reload (models.providers.nvidia-omni, ...)
+[reload] config hot reload applied (models.providers.nvidia-omni)
+```
+
+If you don't see the reload lines, wait a few more seconds and check again.
 
 ## Part 6: Create Auth Profiles for the Vision-Operator
 
@@ -225,6 +280,19 @@ docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
   -- chown -R sandbox:sandbox /sandbox/.openclaw-data/agents/vision-operator
 ```
 
+Verify the directory and ownership:
+
+``` bash
+docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
+  -- ls -la /sandbox/.openclaw-data/agents/vision-operator/agent/
+```
+
+You should see `auth-profiles.json` owned by `sandbox sandbox`:
+
+```
+-rw-r--r-- 1 sandbox sandbox  140 ... auth-profiles.json
+```
+
 > A template is also available at [`vlm-subagent/auth-profiles.template.json`](vlm-subagent/auth-profiles.template.json).
 
 If you skip this step, the gateway will log `No API key found for provider "nvidia-omni"` and fall back to the text-only model, producing hallucinated image descriptions.
@@ -241,6 +309,19 @@ The file is at [`vlm-subagent/TOOLS.md`](vlm-subagent/TOOLS.md) in this reposito
 cat /path/to/TOOLS.md | docker exec -i $DOCKER_CTR \
   kubectl exec -i -n openshell $SANDBOX -c agent \
   -- sh -c 'cat > /sandbox/.openclaw-data/workspace/TOOLS.md'
+```
+
+Verify:
+
+``` bash
+docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
+  -- ls -la /sandbox/.openclaw-data/workspace/TOOLS.md
+```
+
+You should see the file with ~2KB size:
+
+```
+-rw-r--r-- 1 root root 2034 ... TOOLS.md
 ```
 
 ## Part 8: Test It
@@ -261,6 +342,14 @@ docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
   -- ls -la /sandbox/.openclaw-data/workspace/cat.jpg
 ```
 
+You should see a file larger than 10KB:
+
+```
+-rw-r--r-- 1 root root 51395 ... cat.jpg
+```
+
+If the file is tiny (under 1KB), the download failed — try running the curl command again or use a different image source.
+
 ### Connect and chat
 
 ``` bash
@@ -268,11 +357,14 @@ nemoclaw $SANDBOX connect
 openclaw tui
 ```
 
-Then ask:
+You should see the OpenClaw TUI interface with a prompt. Then ask:
 
 > **Use the vision-operator sub-agent to describe the image at /sandbox/.openclaw-data/workspace/cat.jpg in detail**
 
-The main agent should call `sessions_spawn` with `agentId: "vision-operator"`. The vision-operator will analyze the image and return the result through the sessions system. You should see a detailed description of the image.
+You should see:
+1. The main agent acknowledges the request and spawns the vision-operator
+2. After a few seconds, a detailed description of the cat image appears
+3. The status bar shows `agent main | session main (openclaw-tui) | inference/nvidia/nemotron-3-super-120b-a12b`
 
 Other prompts to try:
 
