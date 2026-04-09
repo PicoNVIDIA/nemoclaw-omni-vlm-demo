@@ -24,7 +24,7 @@ Follow the step-by-step guide: **[vlm-subagent-guide.md](vlm-subagent-guide.md)*
 
 | File | Purpose |
 |------|---------|
-| [`vlm-subagent-guide.md`](vlm-subagent-guide.md) | Complete setup walkthrough |
+| [`vlm-subagent-guide.md`](vlm-subagent-guide.md) | Zero-to-hero cookbook (install → working demo) |
 | [`vlm-subagent/openclaw-patch.py`](vlm-subagent/openclaw-patch.py) | Script to patch openclaw.json with Omni provider + agents |
 | [`vlm-subagent/TOOLS.md`](vlm-subagent/TOOLS.md) | Agent instructions (uploaded into sandbox workspace) |
 | [`vlm-subagent/openclaw-reference.json`](vlm-subagent/openclaw-reference.json) | Reference patched config for comparison |
@@ -32,8 +32,10 @@ Follow the step-by-step guide: **[vlm-subagent-guide.md](vlm-subagent-guide.md)*
 
 ## Prerequisites
 
-- A running NemoClaw sandbox with OpenClaw (Nemotron Super 120B)
+- Linux machine with Docker (Brev, DGX, or any Docker-capable host) — **no GPU required**
 - NVIDIA API key (`nvapi-...`) with access to the Omni model
+
+The guide covers everything from installing NemoClaw to a working VLM demo.
 
 ## Based On
 
