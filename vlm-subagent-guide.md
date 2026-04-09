@@ -88,7 +88,7 @@ The sandbox config only has the main inference provider. We need to add:
 ### 3a. Fetch the current config
 
 ``` bash
-docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX \
+docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
   -- cat /sandbox/.openclaw/openclaw.json > /tmp/remote_openclaw.json
 ```
 
@@ -107,23 +107,24 @@ python3 /tmp/openclaw-patch.py "$NVIDIA_API_KEY" \
 
 ``` bash
 # Unlock config + hash
-docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX \
+docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
   -- chmod 644 /sandbox/.openclaw/openclaw.json
-docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX \
+docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
   -- chmod 644 /sandbox/.openclaw/.config-hash
 
 # Write patched config
-docker exec -i $DOCKER_CTR kubectl exec -i -n openshell $SANDBOX \
-  -- tee /sandbox/.openclaw/openclaw.json < /tmp/updated_openclaw.json > /dev/null
+cat /tmp/updated_openclaw.json | docker exec -i $DOCKER_CTR \
+  kubectl exec -i -n openshell $SANDBOX -c agent \
+  -- sh -c 'cat > /sandbox/.openclaw/openclaw.json'
 
 # Regenerate the integrity hash
-docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX \
+docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
   -- /bin/bash -c "cd /sandbox/.openclaw && sha256sum openclaw.json > .config-hash"
 
 # Lock everything back
-docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX \
+docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
   -- chmod 444 /sandbox/.openclaw/openclaw.json
-docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX \
+docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
   -- chmod 444 /sandbox/.openclaw/.config-hash
 ```
 
@@ -132,6 +133,7 @@ docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX \
 The gateway strips API keys from `openclaw.json` when creating per-agent configs. The vision-operator calls the NVIDIA API directly and needs its own auth store. The main agent doesn't need one — it uses the Privacy Router.
 
 ``` bash
+# Create the auth profile
 cat > /tmp/auth-profiles.json << EOF
 {
   "providers": {
@@ -142,14 +144,21 @@ cat > /tmp/auth-profiles.json << EOF
 }
 EOF
 
-docker exec -i $DOCKER_CTR kubectl exec -i -n openshell $SANDBOX \
-  -- tee /sandbox/.openclaw-data/agents/vision-operator/agent/auth-profiles.json \
-  < /tmp/auth-profiles.json > /dev/null
+# Write it to the vision-operator's agent directory
+cat /tmp/auth-profiles.json | docker exec -i $DOCKER_CTR \
+  kubectl exec -i -n openshell $SANDBOX -c agent \
+  -- sh -c 'cat > /sandbox/.openclaw-data/agents/vision-operator/agent/auth-profiles.json'
+
+# IMPORTANT: Fix ownership so the gateway (runs as sandbox user) can write sessions
+docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
+  -- chown -R sandbox:sandbox /sandbox/.openclaw-data/agents/vision-operator
 ```
 
 > A template is also available at [`vlm-subagent/auth-profiles.template.json`](vlm-subagent/auth-profiles.template.json).
 
 If you skip this step, the gateway will log `No API key found for provider "nvidia-omni"` and fall back to the text-only model, producing hallucinated image descriptions.
+
+If you skip the `chown`, the gateway will fail with `EACCES: permission denied, mkdir '/sandbox/.openclaw/agents/vision-operator/sessions'` when the main agent tries to spawn the vision-operator.
 
 ## Part 5: Upload TOOLS.md
 
@@ -158,8 +167,9 @@ TOOLS.md teaches both agents how to handle image tasks. The main agent learns it
 The file is at [`vlm-subagent/TOOLS.md`](vlm-subagent/TOOLS.md) in this repository. Upload it to the sandbox workspace:
 
 ``` bash
-docker exec -i $DOCKER_CTR kubectl exec -i -n openshell $SANDBOX \
-  -- tee /sandbox/.openclaw-data/workspace/TOOLS.md < /path/to/TOOLS.md > /dev/null
+cat /path/to/TOOLS.md | docker exec -i $DOCKER_CTR \
+  kubectl exec -i -n openshell $SANDBOX -c agent \
+  -- sh -c 'cat > /sandbox/.openclaw-data/workspace/TOOLS.md'
 ```
 
 ## Part 6: Upload Test Images and Verify
@@ -234,8 +244,9 @@ The main agent should call `sessions_spawn` with `agentId: "vision-operator"` ra
 | Main agent doesn't delegate to vision-operator | Verify `agents.list` in openclaw.json is correct and the gateway picked up the change. Try explicitly: "use the vision operator to analyze this image." |
 | `Action send requires a target.` / `Unknown channel: webchat` | Vision-operator has `message` tool available. Ensure `"deny": ["message", "sessions_spawn"]` is set in its tools config. |
 | Sub-agent announce timeout (60000ms) | `agents.defaults.timeoutSeconds` not set to 300. Re-run the patch script. |
+| `EACCES: permission denied, mkdir .../vision-operator/sessions` | The vision-operator agent directory is owned by root. Run: `docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent -- chown -R sandbox:sandbox /sandbox/.openclaw-data/agents/vision-operator` |
 | EISDIR error / wrong path | Agents using `/sandbox/.openclaw/workspace` (symlink) instead of `/sandbox/.openclaw-data/workspace/`. Verify TOOLS.md is present in the workspace. |
-| Stale sessions / `session file locked` | Clear session data: `docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -- rm -rf /sandbox/.openclaw-data/agents/*/sessions/*` |
+| Stale sessions / `session file locked` | Clear session data: `docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent -- rm -rf /sandbox/.openclaw-data/agents/*/sessions/*` |
 
 ## Tailing Logs
 
@@ -256,3 +267,7 @@ nemoclaw $SANDBOX destroy --yes
 nemoclaw onboard
 # Repeat Parts 1–6
 ```
+
+## Based On
+
+This guide is based on [Haran Kumar's nemoclaw-with-omni-subagent](https://gitlab-master.nvidia.com/hshivkumar/nemoclaw-with-omni-subagent/-/tree/main?ref_type=heads), adapted into a step-by-step demo format.
