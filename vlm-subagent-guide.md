@@ -211,6 +211,10 @@ cat > /tmp/auth-profiles.json << EOF
 }
 EOF
 
+# Create the vision-operator agent directory (does not exist on a fresh sandbox)
+docker exec $DOCKER_CTR kubectl exec -n openshell $SANDBOX -c agent \
+  -- mkdir -p /sandbox/.openclaw-data/agents/vision-operator/agent
+
 # Write it to the vision-operator's agent directory
 cat /tmp/auth-profiles.json | docker exec -i $DOCKER_CTR \
   kubectl exec -i -n openshell $SANDBOX -c agent \
